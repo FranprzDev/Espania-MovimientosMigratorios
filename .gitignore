@@ -1,0 +1,11 @@
+node_modules
+.next
+__pycache__
+tsconfig.tsbuildinfo
+data/pages.json
+data/ids.json
+data/detail_failures.json
+data/records.json
+data/*.tmp
+pares_cookies.txt
+pares_migratorios.csv
