@@ -13,6 +13,20 @@ export type MigrantRecord = {
   [key: string]: string | number | null | undefined;
 };
 
+export type SearchFilters = {
+  query?: string;
+  birthYear?: number;
+  country?: string;
+  place?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type SearchResult = {
+  total: number;
+  records: MigrantRecord[];
+};
+
 const datasetPath = path.join(process.cwd(), "data", "details.jsonl");
 
 let cachedDataset: MigrantRecord[] | null = null;
@@ -54,23 +68,87 @@ function normalize(value: string): string {
     .trim();
 }
 
-export async function searchDataset(query: string, birthYear?: number, limit = 120): Promise<MigrantRecord[]> {
-  const records = await loadDataset();
-  const normalizedQuery = normalize(query);
+function tokenize(value: string): string[] {
+  return normalize(value)
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
 
-  return records
+function collectFieldValues(record: MigrantRecord, keys: string[]): string[] {
+  return keys
+    .map((key) => record[key])
+    .filter((value): value is string | number => value !== undefined && value !== null && String(value).trim().length > 0)
+    .map((value) => normalize(String(value)));
+}
+
+export async function searchDataset({
+  query = "",
+  birthYear,
+  country = "",
+  place = "",
+  limit = 120,
+  offset = 0,
+}: SearchFilters): Promise<SearchResult> {
+  const records = await loadDataset();
+  const queryTokens = tokenize(query);
+  const countryTokens = tokenize(country);
+  const placeTokens = tokenize(place);
+
+  const filtered = records
     .filter((record) => {
       const matchesYear = birthYear ? Number(record.birth_year) === birthYear : true;
       if (!matchesYear) {
         return false;
       }
-      if (!normalizedQuery) {
-        return true;
-      }
-      const haystacks = [record.full_name, record.record_title, record["Apellidos y nombre"]]
+
+      const nameFields = [record.full_name, record.record_title, record["Apellidos y nombre"]]
         .filter(Boolean)
         .map((value) => normalize(String(value)));
-      return haystacks.some((value) => value.includes(normalizedQuery));
+
+      const countryFields = collectFieldValues(record, [
+        "Nacionalidad",
+        "Lugar de nacimiento",
+        "Ultima residencia",
+        "Lugar de entrada",
+        "Lugar de salida",
+        "Tipo lugar de entrada",
+        "Tipo lugar de salida",
+        "Fondo",
+        "Productor",
+        "Existencia y localización de los originales",
+      ]);
+
+      const placeFields = collectFieldValues(record, [
+        "Lugar de nacimiento",
+        "Ultima residencia",
+        "Lugar de entrada",
+        "Lugar de salida",
+        "Lugar de embarque",
+        "Lugar de desembarque",
+        "Fondo",
+        "Productor",
+        "Existencia y localización de los originales",
+        "Notas",
+      ]);
+
+      const allFields = Array.from(new Set([...nameFields, ...countryFields, ...placeFields]));
+
+      const matchesQuery =
+        queryTokens.length === 0 || queryTokens.every((token) => allFields.some((value) => value.includes(token)));
+      if (!matchesQuery) {
+        return false;
+      }
+
+      const matchesCountry =
+        countryTokens.length === 0 || countryTokens.every((token) => countryFields.some((value) => value.includes(token)));
+      if (!matchesCountry) {
+        return false;
+      }
+
+      const matchesPlace =
+        placeTokens.length === 0 || placeTokens.every((token) => placeFields.some((value) => value.includes(token)));
+      return matchesPlace;
     })
     .sort((a, b) => {
       const pageDiff = Number(a.page_num ?? 0) - Number(b.page_num ?? 0);
@@ -78,8 +156,12 @@ export async function searchDataset(query: string, birthYear?: number, limit = 1
         return pageDiff;
       }
       return Number(a.nid ?? 0) - Number(b.nid ?? 0);
-    })
-    .slice(0, limit);
+    });
+
+  return {
+    total: filtered.length,
+    records: filtered.slice(offset, offset + limit),
+  };
 }
 
 export async function getDatasetSummary() {
@@ -93,4 +175,16 @@ export async function getDatasetSummary() {
     minBirthYear: years.length ? Math.min(...years) : null,
     maxBirthYear: years.length ? Math.max(...years) : null,
   };
+}
+
+export async function getCountryOptions(): Promise<string[]> {
+  const records = await loadDataset();
+
+  return Array.from(
+    new Set(
+      records
+        .map((record) => String(record["Nacionalidad"] ?? "").trim())
+        .filter(Boolean),
+    ),
+  ).sort((a, b) => a.localeCompare(b, "es"));
 }
